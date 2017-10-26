@@ -1,0 +1,110 @@
+#!/bin/bash -e
+PROG=$(basename -- "$0"|sed 's/-/ /')
+OPTIONS_SPEC="\
+$PROG [<pattern>..]
+
+リモート(origin)とローカルに共通して存在するすべてのブランチに対して、リモートブランチの内容をローカルブランチにマージする。
+ただし、Fast-forward可能である場合に限る。
+
+example:
+  $PROG             # すべてのリモートブランチが対象
+  $PROG master      # masterが対象
+  $PROG 'feature/*' # feature/* にマッチするブランチが対象
+--
+"
+source "$(git --exec-path)/git-sh-setup"
+while test $# != 0; do
+	case "$1" in
+	--)
+    shift
+    break
+		;;
+	esac
+	shift
+done
+
+patterns=("$@")
+if [[ ${#patterns[@]} = 0 ]];then
+  patterns=('*')
+fi
+
+orig_head="$(git rev-parse --abbrev-ref HEAD)"
+working_head=
+remote="origin"
+git fetch -p $remote >/dev/null
+
+_matches(){
+  name=$1
+  shift 1
+  patterns=("$@")
+  for pattern in "${patterns[@]}"; do
+    if [[ $name = ${pattern} ]];then
+      return 0
+    fi
+  done
+  return -1
+}
+
+err_not_exists=()
+err_up_to_date=()
+err_non_ff=()
+
+targets=()
+while read branch ;do
+  # ローカルに同名branchが存在
+  if ! git rev-parse $branch &>/dev/null; then
+    err_not_exists+=($branch)
+    continue
+  fi
+  
+  # パターンにマッチ
+  if ! _matches $branch "${patterns[@]}"; then
+    continue
+  fi
+
+  # ローカルとリモートが異なる
+  if [[ $(git rev-parse $branch) = $(git rev-parse $remote/$branch) ]]; then
+    err_up_to_date+=($branch)
+    continue
+  fi
+
+  # ローカルからリモートにFast-forward可能である
+  if ! git merge-base --is-ancestor $branch $remote/$branch ;then
+    err_non_ff+=($branch)
+    continue
+  fi
+  
+  targets+=($branch)
+  if [[ $branch = "$orig_head" ]];then
+    working_head=$(git rev-parse HEAD)
+  fi
+done < <(git branch --list \* --remote | sed "s|^ *${remote}/||g" | grep -v '^HEAD')
+
+_show_list(){
+  local message="$1"
+  shift 1
+  local names=("$@")
+  if [[ ${#names[@]} -gt 0 ]];then
+    echo "$message:"
+    for b in "${names[@]}";do
+      echo "  $b"
+    done
+  fi
+}
+
+#_show_list "not-exists" "${err_not_exists[@]}"
+_show_list "already-up-to-date" "${err_up_to_date[@]}"
+_show_list "non-fast-forward" "${err_non_ff[@]}"
+
+if [[ ${#targets[@]} -gt 0 ]];then
+  _show_list "target-branches" "${targets[@]}"
+  if [[ -n "${working_head}" ]];then
+    git checkout $working_head &>/dev/null
+  fi
+  git fetch . $(for e in "${targets[@]}";do echo "$e";done | awk '{print "'$remote/'"$1":"$1}')
+  if [[ -n "${working_head}" ]];then
+    git checkout $orig_head
+  fi
+else
+  echo "(no targets)"
+fi

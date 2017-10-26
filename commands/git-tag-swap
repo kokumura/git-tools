@@ -1,0 +1,60 @@
+#!/bin/bash -e
+PROG=$(basename -- "$0"|sed 's/-/ /')
+OPTIONS_SPEC="\
+$PROG <tag_or_branch>
+
+指定された名前のtagまたはbranchに対して、それがtagであればbranchに、branchであればtagに変換する。
+
+example:
+  > git branch release/foo-1.0
+  > $PROG release/foo-1.0  # release/foo-1.0 タグが作成され、 release/foo-1.0 ブランチは削除される
+  > $PROG release/foo-1.0  # release/foo-1.0 ブランチが作成され、 release/foo-1.0 タグは削除される  
+--
+"
+source "$(git --exec-path)/git-sh-setup"
+while test $# != 0; do
+	case "$1" in
+	--)
+    shift
+    break
+		;;
+	esac
+	shift
+done
+
+if [[ $# -lt 1 ]]; then
+  usage
+fi
+
+src_name=$1
+dst_name=$src_name
+
+if [[ -z "$src_name" ]];then
+  echo "error: please specify source branch name"
+  exit 1
+fi
+
+orig_head=$(git rev-parse --abbrev-ref HEAD)
+working_head=
+if [[ $src_name = $orig_head ]];then
+  working_head=$(git rev-parse HEAD)
+  git checkout $working_head 2>&1
+fi
+
+if git show-ref --verify refs/tags/$src_name &>/dev/null ;then
+  echo "tag -> branch : '$src_name'"
+  echo "create branch '$dst_name'"
+  git branch -f $dst_name $src_name && git tag -d $src_name
+elif git show-ref --verify refs/heads/$src_name  &>/dev/null ;then
+  echo "branch -> tag : '$src_name'"
+  echo "create tag '$dst_name'"
+  git tag -f $dst_name $src_name && git branch -D $src_name
+else
+  echo "error: '$src_name' is neither tag or branch"
+  exit 1
+fi
+
+
+if [[ -n "$working_head" ]];then
+  git checkout $orig_head
+fi

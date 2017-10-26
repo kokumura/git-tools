@@ -1,0 +1,92 @@
+#!/bin/bash -e
+PROG=$(basename -- "$0"|sed 's/-/ /')
+OPTIONS_SPEC="\
+$PROG [options] <newtag> [<remote_branch>]
+
+リモートブランチに対してタグを打ってpushする。
+
+example:
+  $PROG foo-1.0.0 origin/master
+  
+  $PROG -d foo-1.0.0 origin
+
+options:
+--
+d       delete tag
+f       force push
+"
+source "$(git --exec-path)/git-sh-setup"
+
+force=
+delete=
+while test $# != 0; do
+	case "$1" in
+  -d)
+    delete=1
+    ;;
+	-f)
+		force=1
+		;;
+	--)
+    shift
+    break
+		;;
+	esac
+	shift
+done
+
+if [[ $# -lt 1 ]]; then
+  usage
+  exit 1
+fi
+tag_name="$1"
+branch_name="$2"
+remote=
+
+set -u
+
+echo "new-tag: $tag_name"
+if [[ -z "$branch_name" ]];then
+  remote="$(git remote|head -1)"
+  branch_name="$(git rev-parse  --abbrev-ref origin/HEAD)"
+fi
+echo "remote-branch: $branch_name"
+if [[ -z "$remote" ]];then
+  remote=${branch_name%%/*}
+fi
+echo "remote: $remote"
+
+delete_push(){
+  git tag -d $tag_name 2>/dev/null && echo "deleted local tag '$tag'"
+  git push --delete $remote $tag_name
+}
+
+create_push(){
+  git fetch $remote ${branch_name/${remote}\/} &>/dev/null
+  
+  echo "create local tag '$tag_name'"
+  git tag -f $tag_name $branch_name
+  set +e
+  push_ret=
+  if [[ "$force" = 1 ]];then
+    echo "push tag '$tag_name' to $remote (force)"
+    git push -f $remote $tag_name
+  else
+    echo "push tag '$tag_name' to $remote"
+    git push $remote $tag_name
+  fi
+  push_ret=$?
+  echo "delete local tag '$tag_name'"
+  git tag -d $tag_name &>/dev/null
+  if [[ $push_ret != 0 ]];then
+    echo "error: failed to push tag '$tag_name'"
+    exit 1
+  fi
+  set -e
+}
+
+if [[ "$delete" = 1 ]];then
+  delete_push
+else
+  create_push
+fi
